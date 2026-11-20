@@ -6,6 +6,9 @@ struct SettingsView: View {
     /// 由菜单栏控制器持有，窗口重新打开后继续显示已保存的设置和执行状态。
     @ObservedObject var model: GamePrepModel
 
+    /// 读取系统的登录项状态，由开关请求注册或取消注册。
+    @ObservedObject var loginItem: LoginItemSettings
+
     /// 以应用标识判断保留状态，使预览和退出流程使用同一种匹配方式。
     private var allowedIDs: Set<String> {
         Set(model.whitelist.map(\.id))
@@ -23,6 +26,7 @@ struct SettingsView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    launchAtLogin
                     if model.isRunning || model.result != nil {
                         executionResult
                     }
@@ -60,6 +64,37 @@ struct SettingsView: View {
         .padding(.horizontal, 24)
         .padding(.vertical, 18)
         .accessibilityElement(children: .combine)
+    }
+
+    /// 在设置顶部显示登录时启动的开关，并在系统需要用户处理时提供入口。
+    private var launchAtLogin: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("登录时启动", isOn: Binding(
+                    get: { loginItem.isEnabled },
+                    set: { loginItem.setEnabled($0) }
+                ))
+                .toggleStyle(.switch)
+
+                if loginItem.requiresApproval {
+                    HStack {
+                        Text("请在系统设置中允许登录时启动。")
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        Button("打开系统设置…") { loginItem.openSystemSettings() }
+                            .controlSize(.small)
+                    }
+                }
+
+                if let errorMessage = loginItem.errorMessage {
+                    Text(errorMessage)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(4)
+        }
     }
 
     /// 展示符合退出条件的运行中应用，勾选即可将对应应用加入白名单。

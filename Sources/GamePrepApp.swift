@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import SwiftUI
 
 /// 管理菜单栏交互和设置窗口，整个进程仅保留一个设置窗口实例。
@@ -6,13 +7,16 @@ import SwiftUI
 final class GamePrepDelegate: NSObject, NSApplicationDelegate {
     /// 持有设置和执行状态，供菜单栏与设置窗口共同使用。
     private let model = GamePrepModel()
+    /// 持有登录项管理对象，在启动和打开设置时同步系统状态。
+    private let loginItem = LoginItemSettings()
     /// 保持系统状态栏按钮存活，直到用户退出工具。
     private var statusItem: NSStatusItem?
     /// 复用设置窗口及其滚动位置，关闭窗口时保留窗口实例。
     private var settingsWindow: NSWindow?
 
-    /// 注册菜单栏按钮和应用变化通知，未配置时打开白名单预览。
+    /// 安装菜单栏按钮和默认登录项，手动首次打开时显示设置。
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let shouldShowSetup = !model.hasConfigured && !launchedAtLogin
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem = item
         if let button = item.button {
@@ -28,7 +32,13 @@ final class GamePrepDelegate: NSObject, NSApplicationDelegate {
                            name: NSWorkspace.didLaunchApplicationNotification, object: nil)
         center.addObserver(self, selector: #selector(runningApplicationsChanged(_:)),
                            name: NSWorkspace.didTerminateApplicationNotification, object: nil)
-        if !model.hasConfigured { showSettings() }
+        loginItem.applyDefaultIfNeeded()
+        if shouldShowSetup { showSettings() }
+    }
+
+    /// 回到应用时更新登录时启动的状态，接受用户在系统设置中的操作。
+    func applicationDidBecomeActive(_ notification: Notification) {
+        loginItem.refreshStatus()
     }
 
     /// 从「应用程序」再次打开游戏模式时，唤回同一个设置窗口。
@@ -67,6 +77,7 @@ final class GamePrepDelegate: NSObject, NSApplicationDelegate {
     /// 打开或唤回白名单及执行结果窗口。
     private func showSettings() {
         model.refreshRunningApps()
+        loginItem.refreshStatus()
         let window: NSWindow
         if let existing = settingsWindow {
             window = existing
@@ -80,7 +91,7 @@ final class GamePrepDelegate: NSObject, NSApplicationDelegate {
             window.title = "游戏模式"
             window.isReleasedWhenClosed = false
             window.contentMinSize = NSSize(width: 510, height: 420)
-            window.contentViewController = NSHostingController(rootView: SettingsView(model: model))
+            window.contentViewController = NSHostingController(rootView: SettingsView(model: model, loginItem: loginItem))
             window.setFrameAutosaveName("GamePrepSettings")
             if !window.setFrameUsingName("GamePrepSettings") { window.center() }
             settingsWindow = window
@@ -90,6 +101,13 @@ final class GamePrepDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         // 激活请求可能延迟或被系统拒绝，在当前普通窗口层立即将设置窗口移到最前面。
         window.orderFrontRegardless()
+    }
+
+    /// 读取 macOS 启动事件中的登录项标记，以便自动启动时留在菜单栏。
+    private var launchedAtLogin: Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              event.eventID == kAEOpenApplication else { return false }
+        return event.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
     }
 
     /// 还原菜单栏图标，最近一次结果留在设置页查看。
