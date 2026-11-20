@@ -85,8 +85,11 @@ final class GamePrepDelegate: NSObject, NSApplicationDelegate {
             if !window.setFrameUsingName("GamePrepSettings") { window.center() }
             settingsWindow = window
         }
-        NSApp.activate()
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        if !NSApp.isActive { NSApp.activate() }
         window.makeKeyAndOrderFront(nil)
+        // 激活请求可能延迟或被系统拒绝，在当前普通窗口层立即将设置窗口移到最前面。
+        window.orderFrontRegardless()
     }
 
     /// 还原菜单栏图标，最近一次结果留在设置页查看。
