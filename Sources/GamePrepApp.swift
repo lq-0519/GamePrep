@@ -97,10 +97,9 @@ final class GamePrepDelegate: NSObject, NSApplicationDelegate {
             settingsWindow = window
         }
         if window.isMiniaturized { window.deminiaturize(nil) }
-        if !NSApp.isActive { NSApp.activate() }
+        // 菜单栏点击可能仍让其他应用保持活跃，打开设置时显式激活本应用，让窗口接收键盘输入。
+        if !NSApp.isActive { NSApp.activate(ignoringOtherApps: true) }
         window.makeKeyAndOrderFront(nil)
-        // 激活请求可能延迟或被系统拒绝，在当前普通窗口层立即将设置窗口移到最前面。
-        window.orderFrontRegardless()
     }
 
     /// 读取 macOS 启动事件中的登录项标记，以便自动启动时留在菜单栏。
