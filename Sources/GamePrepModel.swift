@@ -16,7 +16,7 @@ struct AppEntry: Identifiable {
 
 /// 保存一次点击的实际结果，应用退出状态以本次检查结束时为准。
 struct RunResult: Codable {
-    /// 三项动作完成并检查退出状态的时间。
+    /// 各项准备动作完成并检查退出状态的时间。
     let finishedAt: Date
     /// 所有目标实例均已退出的应用名称。
     let closed: [String]
@@ -26,6 +26,8 @@ struct RunResult: Codable {
     let input: StepResult
     /// 系统输出音量设置和回读的结果。
     let volume: StepResult
+    /// 访达窗口关闭后的回读结果，旧版记录中没有这一项。
+    let finder: StepResult?
 }
 
 /// 协调白名单、当前运行应用和游戏模式。所有工作区访问都在主线程进行。
@@ -141,7 +143,7 @@ final class GamePrepModel: ObservableObject {
         defaults.set(true, forKey: setupKey)
     }
 
-    /// 向点击时的目标发出正常退出请求，并独立执行输入法和音量操作。
+    /// 正常退出目标应用，并独立执行访达窗口关闭、输入法和音量操作。
     func run() async {
         guard hasConfigured, !isRunning else { return }
         isRunning = true
@@ -162,6 +164,7 @@ final class GamePrepModel: ObservableObject {
 
         let input = SystemControls.selectABC()
         async let volume = SystemControls.setVolumeToFiftyPercent()
+        async let finder = SystemControls.closeFinderWindows()
 
         // 等待有限时间，让正常退出的应用有机会从工作区消失，同时保持界面可用。
         let deadline = ContinuousClock.now + .seconds(4)
@@ -180,12 +183,14 @@ final class GamePrepModel: ObservableObject {
                 closed.append(target.name)
             }
         }
+        let finderResult = await finder
         let completed = RunResult(
             finishedAt: Date(),
             closed: closed.sorted { $0.localizedStandardCompare($1) == .orderedAscending },
             remaining: remaining.sorted { $0.localizedStandardCompare($1) == .orderedAscending },
             input: input,
-            volume: volumeResult
+            volume: volumeResult,
+            finder: finderResult
         )
         result = completed
         if let data = try? JSONEncoder().encode(completed) { defaults.set(data, forKey: resultKey) }

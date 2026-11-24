@@ -104,7 +104,7 @@ struct SettingsView: View {
     private var runningApps: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                Text("勾选要保留的应用。当前有 \(quitCount) 个应用会收到退出请求。")
+                Text("勾选要保留的应用。当前有 \(quitCount) 个应用会收到退出请求。游戏模式也会关闭访达窗口。")
                     .foregroundStyle(.secondary)
 
                 if model.runningApps.isEmpty {
@@ -169,7 +169,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 让进度与本次结果在同一位置显示，并分别呈现输入法和音量的反馈。
+    /// 在同一位置显示进度与结果，并分别呈现访达、输入法和音量的反馈。
     private var executionResult: some View {
         GroupBox("上次执行结果") {
             VStack(alignment: .leading, spacing: 9) {
@@ -185,6 +185,7 @@ struct SettingsView: View {
 
                     stepRow(result.input)
                     stepRow(result.volume)
+                    if let finder = result.finder { stepRow(finder) }
 
                     if result.closed.isEmpty && result.remaining.isEmpty {
                         Text("本次没有需要退出的应用。")

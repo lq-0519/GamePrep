@@ -62,12 +62,13 @@ final class GamePrepDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
-    /// 左键只打开设置。右键在首次确认后启动游戏模式，执行中忽略重复点击。
+    /// 左键打开设置。右键立即开启监控浮层，并在首次确认后执行游戏准备动作。
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
         guard NSApp.currentEvent?.type == .rightMouseUp else {
             showSettings()
             return
         }
+        if !monitor.isEnabled { monitor.isEnabled = true }
         guard model.hasConfigured else {
             showSettings()
             return
