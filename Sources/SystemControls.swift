@@ -62,24 +62,45 @@ enum SystemControls {
         }.value
     }
 
-    /// 按 Finder 通用窗口类批量关闭，包含文件夹、简介和设置窗口，并排除桌面。
+    /// 枚举 Finder 窗口并按稳定标识逐个关闭。无关闭按钮的窗口（包括桌面）会被跳过。
     /// 每次 Apple 事件和整个脚本都设有等待上限，遇到权限问题时保留独立的步骤结果。
     private static func applyFinderWindowCleanup() -> StepResult {
         let script = """
+            on closeableWindowIDs()
+                tell application id "com.apple.finder"
+                    set windowIDs to {}
+                    repeat with candidateRef in (get every window)
+                        set candidate to contents of candidateRef
+                        try
+                            if (closeable of candidate) is true then set end of windowIDs to id of candidate
+                        on error errorMessage number errorNumber
+                            if errorNumber is not -1728 then error errorMessage number errorNumber
+                        end try
+                    end repeat
+                    return windowIDs
+                end tell
+            end closeableWindowIDs
+
             with timeout of 4 seconds
                 tell application id "com.apple.finder"
                     if it is not running then return "not-running"
-                    set countBefore to count (every window whose closeable is true and class is not desktop window)
+                    set windowIDs to my closeableWindowIDs()
+                    set countBefore to length of windowIDs
                     if countBefore is 0 then return "0:0:"
                     set closeError to ""
-                    try
-                        close (every window whose closeable is true and class is not desktop window)
-                    on error errorMessage number errorNumber
-                        if errorNumber is -1743 then error errorMessage number errorNumber
-                        set closeError to "系统错误 " & errorNumber & ": " & errorMessage
-                    end try
+                    repeat with windowIDRef in windowIDs
+                        set targetID to contents of windowIDRef
+                        try
+                            close window id targetID
+                        on error errorMessage number errorNumber
+                            if errorNumber is -1743 then error errorMessage number errorNumber
+                            if errorNumber is not -1728 and closeError is "" then
+                                set closeError to "系统错误 " & errorNumber & ": " & errorMessage
+                            end if
+                        end try
+                    end repeat
                     if it is not running then return "not-running"
-                    set countAfter to count (every window whose closeable is true and class is not desktop window)
+                    set countAfter to length of (my closeableWindowIDs())
                     return (countBefore as text) & ":" & (countAfter as text) & ":" & closeError
                 end tell
             end timeout
