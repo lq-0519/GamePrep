@@ -9,6 +9,8 @@ final class GamePrepDelegate: NSObject, NSApplicationDelegate {
     private let model = GamePrepModel()
     /// 持有登录项管理对象，在启动和打开设置时同步系统状态。
     private let loginItem = LoginItemSettings()
+    /// 持有独立游戏监控和持久化的浮层设置。
+    private let monitor = GameMonitor()
     /// 保持系统状态栏按钮存活，直到用户退出工具。
     private var statusItem: NSStatusItem?
     /// 复用设置窗口及其滚动位置，关闭窗口时保留窗口实例。
@@ -32,13 +34,26 @@ final class GamePrepDelegate: NSObject, NSApplicationDelegate {
                            name: NSWorkspace.didLaunchApplicationNotification, object: nil)
         center.addObserver(self, selector: #selector(runningApplicationsChanged(_:)),
                            name: NSWorkspace.didTerminateApplicationNotification, object: nil)
+        center.addObserver(self, selector: #selector(foregroundApplicationChanged(_:)),
+                           name: NSWorkspace.didActivateApplicationNotification, object: nil)
         loginItem.applyDefaultIfNeeded()
         if shouldShowSetup { showSettings() }
+        monitor.start()
     }
 
     /// 回到应用时更新登录时启动的状态，接受用户在系统设置中的操作。
     func applicationDidBecomeActive(_ notification: Notification) {
         loginItem.refreshStatus()
+    }
+
+    /// 热插拔和镜像变化后重新计算浮层所在的逻辑屏幕。
+    func applicationDidChangeScreenParameters(_ notification: Notification) {
+        monitor.refreshDisplays()
+    }
+
+    /// 退出工具前主动关闭浮层并回收正在运行的采集器。
+    func applicationWillTerminate(_ notification: Notification) {
+        monitor.shutdown()
     }
 
     /// 从「应用程序」再次打开游戏模式时，唤回同一个设置窗口。
@@ -66,12 +81,21 @@ final class GamePrepDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 设置页打开时更新预览，设置页关闭时保持菜单栏工具空闲。
+    /// 更新设置页的进程列表，并让浮层丢弃已退出进程的帧率数据。
     @objc private nonisolated func runningApplicationsChanged(_ notification: Notification) {
+        let terminatedPID = notification.name == NSWorkspace.didTerminateApplicationNotification
+            ? (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
+            : nil
         Task { @MainActor in
+            if let terminatedPID { monitor.applicationTerminated(pid: terminatedPID) }
             guard settingsWindow?.isVisible == true else { return }
             model.refreshRunningApps()
         }
+    }
+
+    /// 切换前台应用时更新独立监控的数据源，关闭浮层时不会启动采样。
+    @objc private nonisolated func foregroundApplicationChanged(_ notification: Notification) {
+        Task { @MainActor in monitor.foregroundChanged() }
     }
 
     /// 打开或唤回白名单及执行结果窗口。
@@ -91,7 +115,9 @@ final class GamePrepDelegate: NSObject, NSApplicationDelegate {
             window.title = "游戏模式"
             window.isReleasedWhenClosed = false
             window.contentMinSize = NSSize(width: 510, height: 420)
-            window.contentViewController = NSHostingController(rootView: SettingsView(model: model, loginItem: loginItem))
+            window.contentViewController = NSHostingController(rootView: SettingsView(
+                model: model, loginItem: loginItem, monitor: monitor
+            ))
             window.setFrameAutosaveName("GamePrepSettings")
             if !window.setFrameUsingName("GamePrepSettings") { window.center() }
             settingsWindow = window

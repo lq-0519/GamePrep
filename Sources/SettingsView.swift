@@ -8,6 +8,8 @@ struct SettingsView: View {
 
     /// 读取系统的登录项状态，由开关请求注册或取消注册。
     @ObservedObject var loginItem: LoginItemSettings
+    /// 持久化监控样式，并在会话中应用指标选择。
+    @ObservedObject var monitor: GameMonitor
 
     /// 以应用标识判断保留状态，使预览和退出流程使用同一种匹配方式。
     private var allowedIDs: Set<String> {
@@ -27,6 +29,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     launchAtLogin
+                    GameMonitorSettingsView(monitor: monitor)
                     if model.isRunning || model.result != nil {
                         executionResult
                     }
