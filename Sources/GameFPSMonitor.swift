@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 /// 读取指定游戏进程的 Metal 呈现帧率，采集进程的启停由游戏监测会话管理。
@@ -17,7 +18,7 @@ final class GameFPSMonitor {
     private var process: Process?
     /// 用于接收标准输出，关闭监测时同时注销事件处理并关闭读取端。
     private var output: FileHandle?
-    /// 通知界面有效的 FPS；当前采集失败或退出时通知空值。
+    /// 通知界面有效的平均帧率，当前采集失败或退出时通知空值。
     private var onReading: (@MainActor (Double?) -> Void)?
     /// 暂存被管道分割的 JSON 对象，仅由主线程按到达顺序更新。
     private var parser = MetalFPSParser()
@@ -37,6 +38,7 @@ final class GameFPSMonitor {
         let pipe = Pipe()
         let output = pipe.fileHandleForReading
         process.executableURL = URL(fileURLWithPath: Self.toolPath)
+        // 使用系统工具允许的最短更新间隔 1 秒，收到数据后直接刷新。
         process.arguments = ["listen", "--json", "--interval", "1", "--pid", String(pid)]
         var environment = ProcessInfo.processInfo.environment
         // 禁用标准输出缓冲，避免工具把几份低频样本攒在一起才交给浮层。
@@ -75,7 +77,7 @@ final class GameFPSMonitor {
         closeReader()
     }
 
-    /// 检查数据属于当前采集后，发布最后一份有效的游戏呈现帧率。
+    /// 检查数据属于当前采集后，发布这批记录中最新的有效平均帧率。
     private func receive(_ chunk: Data, pid: pid_t, readerID: UUID) {
         guard self.readerID == readerID else { return }
         guard let fps = parser.consume(chunk, targetPID: pid) else { return }
@@ -120,7 +122,7 @@ private struct MetalFPSParser {
     /// 系统工具每个顶层对象从单独一行的行首开始，可据此跳过损坏的上一条记录。
     private var isAtLineStart = true
 
-    /// 处理新字节并给出最后一份有效帧率，保留跨多个管道回调的未完成对象。
+    /// 给出本批完整记录中最新的有效平均帧率，同时保留未完成的对象。
     mutating func consume(_ chunk: Data, targetPID: pid_t) -> Double? {
         var latestFPS: Double?
         for byte in chunk {
@@ -158,7 +160,7 @@ private struct MetalFPSParser {
             case 0x7D:
                 objectDepth -= 1
                 guard objectDepth == 0 else { continue }
-                if let fps = Self.presentedFPS(in: object, targetPID: targetPID) {
+                if let fps = Self.averageFPS(in: object, targetPID: targetPID) {
                     latestFPS = fps
                 }
                 resetObject()
@@ -177,8 +179,8 @@ private struct MetalFPSParser {
         isEscaped = false
     }
 
-    /// 验证进程标识，只读取有呈现帧的图层。优先采用面积最大的图层，同面积取呈现帧较多的图层。
-    private static func presentedFPS(in object: Data, targetPID: pid_t) -> Double? {
+    /// 验证目标进程和平均帧率，接受明确报告的零帧。优先取面积最大的图层，同面积取呈现帧较多的图层。
+    private static func averageFPS(in object: Data, targetPID: pid_t) -> Double? {
         guard let record = (try? JSONSerialization.jsonObject(with: object)) as? [String: Any],
               record["PID"] as? Int == Int(targetPID),
               let layers = record["Layers"] as? [[String: Any]] else { return nil }
@@ -187,8 +189,9 @@ private struct MetalFPSParser {
         for layer in layers {
             guard let performance = layer["Performance Stats"] as? [String: Any],
                   let presented = performance["Presented Frame Stats"] as? [String: Any],
-                  let frames = presented["Frame Count"] as? Int, frames > 0,
-                  let fps = presented["FPS"] as? Double, fps.isFinite, fps > 0 else { continue }
+                  let frames = jsonNumber(presented["Frame Count"]) as? Int, frames >= 0,
+                  let fps = jsonNumber(presented["FPS"])?.doubleValue, fps.isFinite, fps >= 0,
+                  (frames == 0) == (fps == 0) else { continue }
 
             let configuration = layer["Configuration"] as? [String: Any]
             let width = max(configuration?["Width (pixels)"] as? Double ?? 0, 0)
@@ -200,5 +203,11 @@ private struct MetalFPSParser {
             selected = (area, frames, fps)
         }
         return selected?.fps
+    }
+
+    /// JSON 的布尔值也能桥接为 NSNumber，需排除以免被识别成数值零或一。
+    private static func jsonNumber(_ value: Any?) -> NSNumber? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        return number
     }
 }

@@ -38,7 +38,11 @@ final class GameMonitorHUD {
     }
 
     /// 以整块屏幕的边缘摆放角标，上方避开菜单栏和开孔，透明度同时应用于文字和底板。
-    func show(lines: [String], corner: GameMonitorCorner, fontSize: Double, transparency: Double, screen: NSScreen) {
+    /// `coveringWindowLayer` 表示同屏前台全屏窗口的层级，没有这类窗口时恢复普通层级。
+    func show(
+        lines: [String], corner: GameMonitorCorner, fontSize: Double, transparency: Double,
+        screen: NSScreen, coveringWindowLayer: Int?
+    ) {
         let frame = screen.frame
         let atTop = corner == .topLeft || corner == .topRight
         let topInset = atTop ? max(screen.safeAreaInsets.top, frame.maxY - screen.visibleFrame.maxY) : 0
@@ -66,7 +70,12 @@ final class GameMonitorHUD {
         )
         let panel = self.panel ?? makePanel()
         self.panel = panel
-        let level: NSWindow.Level = atTop ? .floating : Self.lowerCornerLevel
+        var level: NSWindow.Level = atTop ? .floating : Self.lowerCornerLevel
+        // 全屏窗口盖住普通角标时只升一级，并保留系统弹出菜单的层级。
+        if let coveringWindowLayer, coveringWindowLayer >= level.rawValue,
+           coveringWindowLayer < NSWindow.Level.popUpMenu.rawValue - 1 {
+            level = NSWindow.Level(rawValue: coveringWindowLayer + 1)
+        }
         if panel.level != level { panel.level = level }
         // 整体透明度为零时保留半透明底板原本的外观，避免在每次采样时重复设置窗口。
         let opacity = CGFloat(1 - transparency)
@@ -213,7 +222,9 @@ struct GameMonitorSettingsView: View {
                     }
                 }
 
-                Text(monitor.supportsFPS ? "FPS 需要前台游戏提供 Metal 呈现数据，等待数据时显示「—」。" : "当前系统无法读取游戏 FPS。")
+                Text(monitor.supportsFPS
+                    ? "收到前台游戏的 Metal 帧率后显示浮层，帧率不可用时隐藏。勾选项只决定显示哪些指标。"
+                    : "当前系统无法读取游戏 FPS，浮层无法显示。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
