@@ -8,6 +8,21 @@ struct StepResult: Codable, Sendable {
 
     /// 面向用户的执行结果，失败时包含可以据此排查的信息。
     let message: String
+
+    /// 设备不适用时显示为跳过。旧版本的执行记录没有这个字段，仍可正常读取。
+    let skipped: Bool?
+
+    /// 保存操作和回读结果。普通成功或失败沿用现有调用方式。
+    init(succeeded: Bool, message: String, skipped: Bool? = nil) {
+        self.succeeded = succeeded
+        self.message = message
+        self.skipped = skipped
+    }
+
+    /// 记录不适用的操作，以便设置页说明原因且不显示为失败。
+    static func skipped(_ message: String) -> StepResult {
+        StepResult(succeeded: false, message: message, skipped: true)
+    }
 }
 
 /// 集中处理游戏模式中的 Finder 窗口、系统输入源和输出音量操作。

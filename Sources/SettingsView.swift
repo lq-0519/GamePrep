@@ -169,7 +169,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 在同一位置显示进度与结果，并分别呈现访达、输入法和音量的反馈。
+    /// 在同一位置显示执行进度，以及外屏、系统设置和 CrossOver 的各项结果。
     private var executionResult: some View {
         GroupBox("上次执行结果") {
             VStack(alignment: .leading, spacing: 9) {
@@ -184,8 +184,11 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
 
                     stepRow(result.input)
+                    if let audio = result.externalAudio { stepRow(audio) }
+                    if let display = result.externalDisplay { stepRow(display) }
                     stepRow(result.volume)
                     if let finder = result.finder { stepRow(finder) }
+                    if let crossOver = result.crossOver { stepRow(crossOver) }
 
                     if result.closed.isEmpty && result.remaining.isEmpty {
                         Text("本次没有需要退出的应用。")
@@ -236,10 +239,12 @@ struct SettingsView: View {
         .help(app.name)
     }
 
-    /// 同时用文字和图标呈现系统操作结果，图标颜色只作为补充。
+    /// 同时用文字和图标区分成功、失败和跳过，图标颜色只作为补充。
     private func stepRow(_ step: StepResult) -> some View {
-        Label(step.message, systemImage: step.succeeded ? "checkmark.circle" : "exclamationmark.triangle")
-            .foregroundStyle(step.succeeded ? Color.primary : Color.orange)
+        let icon = step.skipped == true ? "minus.circle" : (step.succeeded ? "checkmark.circle" : "exclamationmark.triangle")
+        let color = step.skipped == true ? Color.secondary : (step.succeeded ? Color.primary : Color.orange)
+        return Label(step.message, systemImage: icon)
+            .foregroundStyle(color)
             .fixedSize(horizontal: false, vertical: true)
     }
 

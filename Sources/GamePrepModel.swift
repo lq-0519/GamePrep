@@ -28,6 +28,12 @@ struct RunResult: Codable {
     let volume: StepResult
     /// 访达窗口关闭后的回读结果，旧版记录中没有这一项。
     let finder: StepResult?
+    /// 外接显示器的媒体输出切换结果；没有选中外屏时由显示步骤说明原因。
+    let externalAudio: StepResult?
+    /// 外屏检测及 2560 × 1440 HiDPI 切换的结果，旧版记录中没有这一项。
+    let externalDisplay: StepResult?
+    /// 打开或唤回 CrossOver 的结果，旧版记录中没有这一项。
+    let crossOver: StepResult?
 }
 
 /// 协调白名单、当前运行应用和游戏模式。所有工作区访问都在主线程进行。
@@ -58,6 +64,8 @@ final class GamePrepModel: ObservableObject {
     private let defaults = UserDefaults.standard
     /// 提供运行应用列表、应用定位及图标的 macOS 工作区。
     private let workspace = NSWorkspace.shared
+    /// 用同一个应用标识保护运行中的 CrossOver，并定位要打开的启动器。
+    private static let crossOverBundleID = "com.codeweavers.CrossOver"
     /// 白名单记录数组对应的偏好设置键。
     private let whitelistKey = "gamePrepWhitelist"
     /// 是否已查看首次设置对应的偏好设置键。
@@ -143,7 +151,7 @@ final class GamePrepModel: ObservableObject {
         defaults.set(true, forKey: setupKey)
     }
 
-    /// 正常退出目标应用，并独立执行访达窗口关闭、输入法和音量操作。
+    /// 清理目标应用，准备外屏和系统声音，最后打开 CrossOver，并记录各项结果。
     func run() async {
         guard hasConfigured, !isRunning else { return }
         isRunning = true
@@ -163,15 +171,21 @@ final class GamePrepModel: ObservableObject {
         }
 
         let input = SystemControls.selectABC()
-        async let volume = SystemControls.setVolumeToFiftyPercent()
         async let finder = SystemControls.closeFinderWindows()
 
-        // 等待有限时间，让正常退出的应用有机会从工作区消失，同时保持界面可用。
+        // 清理应用和外屏准备可同时进行，退出确认仍按原来的等待上限处理。
         let deadline = ContinuousClock.now + .seconds(4)
+        let external = await prepareExternalDisplay()
+        let volume: StepResult
+        if external.audio?.succeeded == true, GameAudioOutput.currentDeviceHasAdjustableVolume() == false {
+            volume = .skipped("显示器音量由设备控制，跳过系统音量 50% 设置。")
+        } else {
+            volume = await SystemControls.setVolumeToFiftyPercent()
+        }
+
         while ContinuousClock.now < deadline && targets.contains(where: { !$0.app.isTerminated }) {
             try? await Task.sleep(for: .milliseconds(100))
         }
-        let volumeResult = await volume
         let remainingIDs = Set(targets.filter { !$0.app.isTerminated }.map(\.id))
         var recordedIDs = Set<String>()
         var closed = [String]()
@@ -184,19 +198,23 @@ final class GamePrepModel: ObservableObject {
             }
         }
         let finderResult = await finder
+        let crossOver = await openCrossOver()
         let completed = RunResult(
             finishedAt: Date(),
             closed: closed.sorted { $0.localizedStandardCompare($1) == .orderedAscending },
             remaining: remaining.sorted { $0.localizedStandardCompare($1) == .orderedAscending },
             input: input,
-            volume: volumeResult,
-            finder: finderResult
+            volume: volume,
+            finder: finderResult,
+            externalAudio: external.audio,
+            externalDisplay: external.display,
+            crossOver: crossOver
         )
         result = completed
         if let data = try? JSONEncoder().encode(completed) { defaults.set(data, forKey: resultKey) }
     }
 
-    /// 仅选普通桌面应用，并保护工具本身、Finder 及系统桌面组件。
+    /// 仅选可清理的普通应用，设置预览和执行过程都避开 CrossOver、Finder 及系统桌面组件。
     private func eligibleApplications() -> [NSRunningApplication] {
         workspace.runningApplications.filter { app in
             guard app.activationPolicy == .regular,
@@ -204,8 +222,50 @@ final class GamePrepModel: ObservableObject {
                   app.processIdentifier != NSRunningApplication.current.processIdentifier,
                   let id = app.bundleIdentifier, !id.isEmpty,
                   id != "com.apple.finder",
+                  id != Self.crossOverBundleID,
                   let url = app.bundleURL else { return false }
             return !url.path.hasPrefix("/System/Library/")
+        }
+    }
+
+    /// 选定外接显示器后先切媒体输出，再设置显示档位。显示模式发生变化时重新确认 HDMI 路由。
+    private func prepareExternalDisplay() async -> (audio: StepResult?, display: StepResult) {
+        switch GameDisplay.selectExternal() {
+        case .unavailable(let step):
+            return (nil, step)
+        case .selected(let display):
+            var audio: StepResult
+            if let name = display.name {
+                audio = await GameAudioOutput.selectExternalDisplay(named: name)
+            } else {
+                audio = .skipped("无法用显示器名称唯一匹配声音输出，跳过声音切换。")
+            }
+
+            let resolution = await Task.detached(priority: .userInitiated) { display.setGameResolution() }.value
+            if resolution.didReconfigure, let name = display.name {
+                // HDMI 重新协商可能暂时移除音频设备，稍后重新匹配并确认当前路由。
+                try? await Task.sleep(for: .milliseconds(300))
+                audio = await GameAudioOutput.selectExternalDisplay(named: name)
+            }
+            return (audio, resolution.step)
+        }
+    }
+
+    /// 通过系统工作区打开 CrossOver。已运行时使用现有应用包并唤回当前实例。
+    private func openCrossOver() async -> StepResult {
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: Self.crossOverBundleID)
+        guard let url = running.first(where: { !$0.isTerminated })?.bundleURL
+                ?? workspace.urlForApplication(withBundleIdentifier: Self.crossOverBundleID) else {
+            return StepResult(succeeded: false, message: "未找到已安装的 CrossOver。")
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        configuration.createsNewApplicationInstance = false
+        do {
+            _ = try await workspace.openApplication(at: url, configuration: configuration)
+            return StepResult(succeeded: true, message: "CrossOver 已打开。")
+        } catch {
+            return StepResult(succeeded: false, message: "无法打开 CrossOver（\(error.localizedDescription)）。")
         }
     }
 
